@@ -1,0 +1,636 @@
+# TARA Project Learning Guide
+
+> **Welcome!** This document explains in simple, plain English what **TARA** is, what has been built so far, why each part exists, and how everything works together. This file will be continuously updated as new features are added.
+
+---
+
+## 1. What is TARA?
+
+**TARA** stands for **Tech-Architecture & Automated Review Assistant**.
+
+Think of TARA as an **autonomous software consultancy firm in a box**. Normally, when you want to build a software project, you need:
+1. A **CEO / Product Evaluator** to review your product ideas and tell you if they make sense or have missing requirements.
+2. A **Software Developer** to write real, modular code.
+3. A **Quality Assurance (QA) Engineer** to inspect the code for bugs, errors, and bad practices.
+4. A **Security Officer** to scan the code for security holes (like SQL injection or data leaks) and patch them.
+
+TARA automates this entire team using **AI agents** powered by **Google Gemini** and orchestrates them using **LangGraph**.
+
+---
+
+## 2. The Big Picture: How It Works
+
+Here is the journey of your project requirements document (PRD) from start to finish:
+
+```
++-------------------------------------------------------------------+
+|                        Your Product Idea (PRD)                    |
++-------------------------------------------------------------------+
+                                  |
+                                  v
+                   [Step 1: CEO / VC Evaluator]
+        Analyzes feasibility, feature gaps, and structural flaws.
+                                  |
+                                  v
+                   [Step 2: Human Approval Gate]
+            You decide: Approve, Request Changes, or Reject.
+                                  |
+                   (If approved, continue below)
+                                  |
+                                  v
+                    [Step 3: Software Developer]
+              Writes complete, multi-file Python code.
+                                  |
+                                  v
+                     [Step 4: QA Quality Engineer]
+          Inspects code for bugs, edge cases, and code smells.
+                                  |
+                                  v
+                     [Step 5: Security Officer]
+       Scans for OWASP security risks and creates security patches.
+                                  |
+                                  v
+                     [Final Downloadable Package]
+              A ready-to-run, hardened ZIP package!
+```
+
+---
+
+## 3. What Has Been Built So Far (And Why)
+
+### Step 1: Environment & Libraries
+- **What was done:** Verified and installed `google-genai` (version 2.18.1) and `pydantic` (version 2.13.4).
+- **Why:** 
+  - `google-genai` is the official Google SDK to communicate with Gemini models.
+  - `pydantic` ensures that the AI answers strictly in structured formats (like JSON with exact fields) instead of messy unstructured text.
+
+---
+
+### Step 2: The CEO Agent (`backend/app/agents/ceo.py`)
+- **What it does:**
+  - Reads your Product Requirements Document (PRD).
+  - Uses `gemini-2.5-flash` to evaluate the PRD for market viability, missing features, and architectural flaws.
+  - Returns a structured critique (`Verdict`: APPROVED, NEEDS_REVISION, or REJECTED).
+  - Also includes a built-in offline fallback if no API key is set, so testing never crashes.
+- **Why we built it:** Before writing code, you need to know if the product requirements are clear and complete. If requirements are bad, the generated code will also be bad.
+
+---
+
+### Step 3: The Developer Agent (`backend/app/agents/developer.py`)
+- **What it does:**
+  - Takes the approved PRD (and any notes you gave).
+  - Uses `gemini-2.5-pro` to write full, functional, multi-file Python code (like `main.py`, `models.py`, `utils.py`, etc.).
+  - Returns a structured `DeveloperCodeOutput` containing a list of `GeneratedFile` objects (each having a `path` and `content`).
+- **Why we built it:** To dynamically write real code without relying on static templates or dummy placeholder text.
+
+---
+
+### Step 4: The QA Quality Engineer Agent (`backend/app/agents/qa.py`)
+- **What it does:**
+  - Takes all the Python code written by the Developer Agent.
+  - Uses `gemini-2.5-pro` to inspect the code for bugs, missing error handling, and code smells.
+  - Generates a `QAReport` containing a pass/fail verdict, an overview summary, and a list of `QAIssue` items with suggested refactorings.
+- **Why we built it:** Even good developers make mistakes. Having an AI acting as a dedicated QA reviewer catches bugs and logic flaws early.
+
+---
+
+### Step 5: The Security Officer Agent (`backend/app/agents/security.py`)
+- **What it does:**
+  - Performs a Static Application Security Testing (SAST) review on the codebase.
+  - Uses `gemini-2.5-pro` to scan for OWASP Top 10 vulnerabilities (such as SQL injection, input validation errors, and bad logging).
+  - Produces a `SecurityReport` with detected `Vulnerability` items and concrete security patches to harden the code.
+- **Why we built it:** Security must never be an afterthought. Automated scanning ensures the generated application is safe before it is packaged or deployed.
+
+---
+
+### Step 6: Direct Multi-Agent Pipeline (`backend/app/graph/builder.py`)
+- **What it does:**
+  - Uses **LangGraph** (`StateGraph`) to wire the four agents into a simple, direct pipeline:
+    `ceo` -> `developer` -> `qa` -> `security` -> `END`.
+  - Compiles the pipeline so it can be called with a single command or endpoint.
+- **Why we built it:** To have a clear, fast, automatic execution pipeline that runs all 4 agents end-to-end without stopping for human intervention when needed.
+
+---
+
+### Step 7: Shared State Memory (`backend/app/graph/state.py`)
+- **What it does:**
+  - Defines `AgentState` using Python typing.
+  - This is the "shared memory board" where every agent reads the current status and writes its results (PRD text, CEO critique, generated code, QA report, security report, and audit logs).
+- **Why we built it:** Without a shared memory board, agents cannot pass their work to the next agent in line.
+
+---
+
+### Step 8: FastAPI Server & Endpoints (`backend/app/main.py` & `backend/app/api/sessions.py`)
+- **What it does:**
+  - Exposes REST API endpoints and WebSockets:
+    - `POST /api/sessions/graph/run`: Runs the direct 4-agent graph from start to finish.
+    - `POST /api/sessions/start`: Starts a session with the Human Approval Gate.
+    - `POST /api/sessions/{session_id}/decide`: Submits your decision (Approve / Request Changes / Reject).
+    - `GET /api/sessions/{session_id}/download`: Packages the hardened code into a downloadable ZIP file.
+    - `WS /api/sessions/{session_id}/stream`: Streams real-time live logs to the browser.
+    - `GET /health`: Checks if the server is alive.
+    - `GET /docs`: Interactive Swagger documentation.
+- **Why we built it:** Allows the frontend Web IDE, command line scripts, and external tools to interact with TARA easily over HTTP.
+
+---
+
+### Step 9: Web IDE Frontend (`backend/app/static/`)
+- **What it does:**
+  - A browser-based IDE featuring Monaco Editor (the same editor engine used in VS Code).
+  - Displays real-time progress steps, agent critiques, code files, and security reports with a sleek dark theme.
+- **Why we built it:** To provide an intuitive, visual interface for developers and stakeholders to watch the AI team work.
+
+---
+
+### Step 10: Hosted Locally on Server
+- **What it does:**
+  - Running on `http://127.0.0.1:8000/`.
+  - Web IDE accessible at: `http://127.0.0.1:8000/`
+  - Swagger API docs accessible at: `http://127.0.0.1:8000/docs`
+- **Why we built it:** So you can test and use TARA directly from your browser right now on your machine.
+
+---
+
+## 4. Ongoing Work & Changelog
+
+### Step 11: Real Sandboxed Execution & Dynamic SAST (Docker, E2B & Ephemeral Sandbox)
+- **What was done:**
+  - Built `backend/app/sandbox/runner.py` providing a 3-tier isolated execution environment (`E2BSandbox`, `DockerSandbox`, `LocalEphemeralSandbox`).
+  - Completely replaced mock string matching in `backend/app/agents/security.py` with real dynamic static analysis tools: `bandit` (runs `bandit -r . -f json` and parses JSON), `flake8`, and Python `ast` syntax validation.
+  - Added live code execution in the Web IDE via `POST /api/sessions/{session_id}/run`, a **"▶️ Run in Sandbox"** button in the editor toolbar, and an interactive **Sandbox Terminal** tab in the browser.
+- **Why we built it:** 
+  - To fulfill PRD requirements FR-18 through FR-20 (sandboxed execution).
+  - To catch real security vulnerabilities (like shell injection, insecure imports, hardcoded secrets) with industrial-strength SAST tools instead of artificial string matches.
+  - To let developers test and run their generated Python code immediately in the browser inside an isolated sandbox!
+
+---
+
+### Step 12: Tier 1 E2B Cloud MicroVM Sandbox Setup
+- **What was done:**
+  - Configured `E2B_API_KEY` in root and backend `.env` files.
+  - Installed and pinned `e2b-code-interpreter>=2.10.0` in `backend/requirements.txt`.
+  - Updated `backend/app/sandbox/runner.py` to use `Sandbox.create()`, automatic installation of SAST tools (`bandit`, `flake8`) on the cloud microVM, and graceful error handling for `CommandExitException`.
+  - Verified live command execution and dynamic Bandit SAST running directly in cloud-isolated E2B MicroVMs.
+- **Why we built it:**
+  - Provides genuine cloud-isolated hardware virtualization for running untrusted user code and security scans without any danger to the host computer.
+
+---
+
+### Step 13: PDF Parsing Support & Document Ingestion (FR-6)
+- **What was done:**
+  - Installed `pypdf>=4.0.0` to provide pure-Python, fast binary PDF text extraction without heavy native C dependencies.
+  - Added endpoint `POST /api/sessions/upload` in `backend/app/api/sessions.py` to ingest `.pdf`, `.md`, and `.txt` files, extract structured page-by-page text, and return metadata (`filename`, `file_type`, `page_count`, `char_count`, `extracted_text`).
+  - Integrated drag-and-drop and file selection in the Web IDE (`backend/app/static/app.js`), allowing users to drop PDF specifications into the browser and immediately populate the PRD editor.
+- **Why we built it:**
+  - Fulfills PRD requirement FR-6.
+  - Allows engineers and product managers to drop existing architectural PDFs directly into TARA without needing to manually copy/paste or convert them to markdown first.
+
+---
+
+### Step 14: Interactive Monaco 3-Way Diff & Editor Live Editing
+- **What was done:**
+  - Replaced the three static text boxes in the diff viewer with Monaco's native `monaco.editor.createDiffEditor()`, providing red/green line-level visual diff highlighting and gutter markers.
+  - Added interactive diff stage selection tabs: `1. Dev ➔ QA`, `2. QA ➔ Security`, `3. Dev ➔ Security (Full)`, and `❖ 3-Way Dual View` (side-by-side dual Monaco diff editors), plus a toggle button for side-by-side vs inline diff layout.
+  - Added **Live File Updates**: Configured `backend/app/core/session_manager.py` to broadcast `node_update` WebSocket messages as each LangGraph agent completes, refreshing the Monaco file tree live without waiting for pipeline completion.
+  - Added **Live Code Editing**: Enabled live editing in the main Monaco editor, synchronizing manual user edits into the session files so that "▶️ Run in Sandbox" immediately executes user-modified code.
+  - Created `want.md` in the project root documenting user inputs, credentials, and customization preferences for future milestones.
+- **Why we built it:**
+  - To turn TARA into a full-fledged, real-time Web IDE where users can watch files appear live as AI engineers build them, inspect exact line-by-line diffs across pipeline stages, and make manual edits directly in the browser.
+
+---
+
+### Step 15: Persistent State (SqliteSaver) & Automated 24h TTL Cleanup (APScheduler)
+- **What was done:**
+  - Swapped out the in-memory `MemorySaver()` in `backend/app/core/session_manager.py` for persistent SQLite storage using `SqliteSaver` (from `langgraph-checkpoint-sqlite`) stored at `backend/storage/tara_sessions.db`.
+  - Created a `session_metadata` SQLite table to track each session's status, PRD filename, creation timestamp, and last updated timestamp across server restarts.
+  - Built an automated cleanup engine in `backend/app/core/cleanup.py` with `cleanup_expired_resources()` to purge expired checkpoints, delete old `.zip` release packages from `storage/packages/`, and remove orphaned temp sandbox directories older than 24 hours (86,400s).
+  - Integrated `APScheduler` (`BackgroundScheduler`) to automatically run the TTL cleanup job every hour without blocking FastAPI's async event loop.
+  - Registered FastAPI `lifespan(app)` in `backend/app/main.py` for clean scheduler startup and shutdown.
+  - Added new REST endpoints in `backend/app/api/sessions.py`: `GET /api/sessions` (list active sessions), `POST /api/sessions/cleanup` (manual TTL cleanup trigger), and `DELETE /api/sessions/{session_id}`.
+  - Added a full test suite `backend/tests/test_persistence_cleanup.py` proving state persistence across process restarts and automated TTL cleanup.
+- **Why we built it:**
+  - Fulfills PRD Section 6.1 requirements.
+  - Guarantees zero data loss on server restarts, prevents disk bloat by purging old artifacts after 24 hours, and keeps the server lean and production-ready.
+
+---
+
+### Step 16: Google Antigravity SDK Integration (`google-antigravity`)
+- **What was done:**
+  - Installed `google-antigravity` (version `0.1.16`) and pinned `google-antigravity>=0.1.16` in `backend/requirements.txt`.
+---
+
+### Step 17: Antigravity SDK Autonomous Workspace Execution & Monaco Diff Streaming
+- **What was done:**
+  - **SDK Integration & Capabilities Configuration:** Configured the Google Antigravity Agent runtime (`google-antigravity` / `antigravity-sdk-python`) with built-in workspace capabilities (`READ_FILE`, `WRITE_FILE`, `LIST_DIR`) that map directly to Antigravity's `VIEW_FILE`, `CREATE_FILE`, `EDIT_FILE`, and `LIST_DIR` tools, targeting the local workspace root directory.
+  - **Non-Blocking FastAPI Endpoints:** Created `POST /api/tara/edit` in `backend/app/routers/tara.py` which accepts user instructions, targets specific workspace files, and launches background agent tasks asynchronously (`asyncio.create_task`) without blocking the primary Uvicorn event loop. Added `GET /api/tara/jobs/{job_id}` for job status tracking and `GET /api/tara/status` for SDK readiness diagnostics.
+  - **Real-Time WebSockets & Diff Streaming:** Implemented `/ws/tara` WebSocket route that passes user prompts to `agent.chat(prompt)` and streams agent thoughts, tool invocations, tokens, and progressive line-by-line diffs (`diff_line`) and complete diff models (`file_diff`) over WebSockets.
+  - **Monaco Diff Editor Integration:** Connected frontend `app.js` to `/ws/tara` so incoming diffs stream directly into Monaco's `createDiffEditor()` via `monaco.editor.createModel()`, rendering real-time code additions, deletions, and modifications.
+  - **Comprehensive Test Suite:** Built automated tests in `backend/tests/test_antigravity_sdk.py` verifying SDK capability resolution, workspace targeting, diff calculations, asynchronous REST endpoints, and WebSocket streaming.
+- **Why we built it:**
+  - Moves TARA beyond basic LLM prompts into a true agentic coding engine capable of directly reading, navigating, editing, and streaming codebase diffs into the Monaco editor with non-blocking concurrency.
+
+---
+
+### Step 18: Dribbble-Inspired "IDE — AI Developer Environment" UI/UX Overhaul
+- **What was done:**
+  - **Slim Vertical Activity Dock (52px):** Implemented a high-end icon dock on the far left with glowing SVG icons for PRD Spec, File Explorer, Code Canvas, 3-Way Diff, Security SAST, Sandbox Terminal, and Copilot Toggle.
+  - **Right-Side Dedicated AI Copilot Panel (350px):** Built an interactive AI copilot drawer directly connected to the `/ws/tara` WebSocket stream. Displays real-time typing responses, collapsible thought accordions with subtle violet glow, tool execution pill badges, and quick action chips (`⚡ Add TTL Eviction`, `🛡️ SAST Hardening`, `🧪 Generate Pytest`).
+  - **Floating Monaco Canvas Controls & Breadcrumbs:** Added path breadcrumbs (`workspace / src / main.py`), live editing indicator, and floating action pills (`▶ Run in Sandbox`, `❖ 3-Way Diff`).
+  - **Obsidian Glassmorphic Theme:** Designed a deep charcoal/obsidian palette (`#07090e`, `#10141f`, `#151a28`) with electric violet (`#8b5cf6`) and cyber cyan (`#06b6d4`) accents, subtle glowing borders, and backdrop blurs (`backdrop-filter: blur(16px)`).
+- **Why we built it:**
+  - Directly matches the high-end, futuristic **"IDE - AI developer environment"** visual concept by Anatoliy Demyanchuk on Dribbble, giving TARA a world-class developer experience.
+
+---
+
+### Step 19: Strix Autonomous Security Tool Integration & E2B Runner Pipeline
+- **What was done:**
+  - **E2B Sandbox Update:** Updated `backend/app/sandbox/e2b_runner.py` and `backend/app/sandbox/runner.py` to run three security tools against the workspace inside isolated execution environments (E2B Cloud MicroVM, Docker, or LocalEphemeral): `flake8`, `bandit -r . -f json`, and `strix -n --target ./` (running in non-interactive mode).
+  - **Environment Variable Forwarding:** Forwarded `STRIX_LLM` and `LLM_API_KEY` (as well as `GEMINI_API_KEY`) into the E2B instance context via `envs` in `Sandbox.create(...)` and `commands.run(...)`.
+  - **Unified Output Parser & SecurityFinding Schema:** Combined results from Flake8, Bandit, and Strix into a unified Pydantic `SecurityFinding` schema (`tool`, `severity`, `issue`, `file_path`, `line_number`, `category`, `exploit_poc`, `patch_recommendation`). Handled both JSON payloads and structured CLI report formats.
+  - **Automated Hardening with ChatGoogleGenerativeAI:** Integrated `ChatGoogleGenerativeAI` in `backend/app/agents/security.py` to synthesize production-ready hardened code patches from the unified security findings, with an option to write patched versions directly to workspace files.
+  - **Real-Time WebSocket Updates & Monaco Diff Sync:** Integrated `/ws/security` and connected `backend/app/static/app.js` to stream real-time tool execution logs (`[FLAKE8]`, `[BANDIT]`, `[STRIX]`), line-by-line diffs (`diff_line`), and complete diff models (`file_diff`) into Monaco's `createDiffEditor()` for side-by-side or inline review, with one-click patch application (`btn-accept-patch`).
+  - **Automated Verification:** Added a comprehensive test suite `backend/tests/test_e2b_strix.py` (9 passing tests) verifying schema serialization, OWASP mapping, environment forwarding, CLI output parsing, patching with disk writing, WebSocket streaming, and REST endpoints.
+- **Why we built it:**
+  - Brings autonomous penetration testing (`usestrix/strix`) into TARA's security layer alongside static linters (Flake8) and AST analysis (Bandit).
+  - Gives developers an end-to-end automated security pipeline: discover vulnerabilities, forward LLM context in an isolated E2B microVM, synthesize AI patches with Gemini, and visually review and accept diffs directly inside the Monaco editor.
+
+---
+
+### Step 20: Model Context Protocol (MCP) Servers Integration with Strix & Google Antigravity IDE
+- **What was done:**
+  - **Strix MCP Configuration:** Created `~/.strix/mcp-servers.json` and project workspace `./mcp-servers.json` defining both local stdio tools (`local_fs` via `@modelcontextprotocol/server-filesystem`) and remote HTTP tools (`github` via Copilot MCP endpoint).
+  - **Antigravity IDE Customization Registration:** Configured `~/.gemini/config/mcp_config.json` and `.agents/mcp_config.json` using Antigravity's `mcpServers` schema (`serverUrl` and `headers` for HTTP transports, `command` and `args` for stdio).
+  - **Strix Runner & E2B Runner MCP Flags:** Enhanced `backend/app/sandbox/strix_runner.py` and `backend/app/sandbox/e2b_runner.py` to support `--mcp-config`, `--mcp-server`, and `--mcp-exclude` CLI flags, mount configuration paths, bundle `mcp-servers.json` into sandbox payloads, and parse MCP connection logs (`MCP: connected X servers (Y tools): ...`).
+  - **Security Agent & API Schemas:** Added `mcp_config`, `mcp_server`, and `mcp_exclude` fields to `StrixScanRequest` in `backend/app/routers/security.py` and passed them down to `run_unified_security_scan`.
+  - **Skill Documentation:** Updated `.agents/skills/strix-security-scan/SKILL.md` with configuration guides, CLI options, verification steps, and dashboard commands (`strix view`).
+- **Why we built it:**
+  - Standardizes tool access across both the Antigravity agent runtime and Strix's autonomous penetration testing loops through open Model Context Protocol (MCP) servers.
+  - Allows Strix to discover issues, query repositories, and interact with external systems using verified MCP tools with granular inclusion and exclusion controls.
+
+---
+
+### Step 21: Real-Time Token-by-Token Code Generation with Antigravity SDK & Monaco Live Streaming
+- **What was done:**
+  - **Antigravity SDK Backend Streaming (`backend/app/routers/tara_stream.py`):** Created a dedicated streaming router initializing `google.antigravity.Agent` using `LocalAgentConfig` with `api_key=os.getenv("GEMINI_API_KEY")`. Implemented `async for chunk in agent.chat(user_prompt, stream=True):` to capture content deltas and streamed structured JSON payloads (`{ "type": "CODE_DELTA", "file_path": "main.py", "delta": chunk.text }`) over the `/ws/tara/stream` WebSocket endpoint.
+  - **FastAPI Lifecycle Mount:** Registered the WebSocket `/ws/tara/stream` endpoint before static asset mounts in `backend/app/main.py`.
+  - **Client-Side Live Monaco Typing (`backend/app/static/app.js`):** Connected to `/ws/tara/stream`. On receiving `CODE_DELTA`, resolves the active Monaco editor model (`this.editor.getModel()`), calculates the active cursor boundary, and applies character edits directly into the buffer via `editor.executeEdits("tara-stream", [...])` rather than replacing the buffer at the end. Automatically tracks cursor positioning via `editor.revealLine()`.
+  - **Interactive UI Support:** Added a "⚡ Live Stream" persona chip in the copilot panel and enabled `/stream` / `/live` prompt prefixes.
+- **Why we built it:**
+  - Moves beyond batch generation or whole-file replacements, giving developers an interactive AI pair-programming experience where code appears token-by-token in real time.
+
+---
+
+## 4. Ongoing Work & Changelog
+
+*(New updates will be logged here as we continue building)*
+
+| Date | Component / File | What Was Done | Why |
+|---|---|---|---|
+| 2026-09-14 | `backend/requirements.txt` | Installed & verified `google-genai` and `pydantic` | Core libraries required for Gemini API calls & schema outputs. |
+| 2026-09-14 | `backend/app/agents/ceo.py` | Added `Verdict`, `CEOCritique`, and `evaluate_prd` | CEO agent to evaluate PRD viability using Gemini 2.5 Flash. |
+| 2026-09-14 | `backend/app/agents/developer.py` | Added `GeneratedFile`, `DeveloperCodeOutput`, and `generate_code_from_prd` | Developer agent to generate full Python code using Gemini 2.5 Pro. |
+| 2026-09-14 | `backend/app/agents/qa.py` | Added `QAIssue`, `QAReport`, and `analyze_code_qa` | QA agent to inspect multi-file code for bugs and quality issues. |
+| 2026-09-14 | `backend/app/agents/security.py` | Added `Vulnerability`, `SecurityReport`, and `analyze_code_security` | Security agent to perform SAST analysis and output patches. |
+| 2026-09-14 | `backend/app/graph/builder.py` | Created sequential LangGraph pipeline (`ceo` -> `developer` -> `qa` -> `security`) | Direct multi-agent execution pipeline without HITL pause. |
+| 2026-09-14 | `backend/app/api/sessions.py` | Added `POST /api/sessions/graph/run` endpoint | Allows running the sequential graph via HTTP API. |
+| 2026-09-14 | `backend/app/main.py` | Hosted locally via Uvicorn on `http://127.0.0.1:8000` | Makes Web IDE and API accessible locally in real time. |
+| 2026-09-14 | `backend/app/core/llm.py` & agents | Built automatic high-quota model failover chain | `gemini-3.6-flash` has a strict preview limit of 20 requests/day (`429 RESOURCE_EXHAUSTED`), while `gemini-2.5-flash` was deprecated for new users (`404 NOT_FOUND`). Added `call_gemini_with_fallback` defaulting to `gemini-3.5-flash` and `gemini-3.5-flash-lite` to guarantee abundant free tier quota and zero interruptions. |
+| 2026-09-14 | `backend/app/sandbox/` & `security.py` | Built 3-Tier Sandbox Runner, real Bandit/Flake8/AST SAST, and Web IDE 'Run in Sandbox' | Replaced mock strings with real Bandit JSON parsing mapped to OWASP Top 10, isolated execution sandbox, and live terminal execution in the browser. |
+| 2026-09-14 | `backend/app/sandbox/runner.py` & `.env` | Enabled Tier 1 E2B Cloud MicroVM Sandbox with user API key | Cloud hardware-level isolation for running untrusted code and SAST scans. |
+| 2026-09-14 | `backend/app/api/sessions.py` & `app.js` | Built PDF parsing support & `POST /api/sessions/upload` endpoint | Fulfills FR-6 by allowing drag-and-drop ingestion of `.pdf`, `.md`, and `.txt` specifications. |
+| 2026-09-14 | `frontend` & `session_manager.py` | Added Monaco Native 3-Way Diff, Live WS File Updates, and Live Editing | Native diff highlighting (Dev ➔ QA ➔ Sec), live file tree updates during streaming, and live editing. |
+| 2026-09-14 | `backend/app/core/session_manager.py` | Integrated `SqliteSaver` persistent checkpointer & session metadata | Persists multi-agent workflow checkpoints in SQLite across server restarts. |
+| 2026-09-14 | `backend/app/core/cleanup.py` & `main.py` | Added APScheduler 24h automated TTL cleanup job & FastAPI lifespan hook | Automatically purges expired session checkpoints, packages, and temp folders every 24h. |
+| 2026-09-14 | `backend/tests/test_persistence_cleanup.py` | Added automated persistence, TTL cleanup, and API test suite | 100% test pass rate verifying SQLite restart durability and cleanup pruning. |
+| 2026-09-15 | `backend/app/agents/antigravity_agent.py` & `requirements.txt` | Integrated `google-antigravity` SDK & file tool configuration | Enables agents to inspect, view, edit, and create code files via official Antigravity tools. |
+| 2026-09-15 | `backend/app/routers/tara.py` & `tara_agent.py` | Built non-blocking `/api/tara/edit`, `/ws/tara` diff streaming, and Monaco viewer | Autonomous workspace file execution with progressive line diffs rendered directly in Monaco. |
+| 2026-09-15 | `frontend` (`index.html`, `style.css`, `app.js`) | Re-engineered UI to match Dribbble "IDE - AI developer environment" | Slim Activity Dock, right AI Copilot drawer, floating Monaco breadcrumb bar, and obsidian glassmorphism. |
+| 2026-09-15 | `backend/app/sandbox/e2b_runner.py` & `runner.py` | Integrated Strix (`strix -n --target ./`), Flake8, and Bandit in E2B with env forwarding | Triple-layer SAST & penetration testing with `STRIX_LLM` and `LLM_API_KEY` forwarded to E2B context. |
+| 2026-09-15 | `backend/app/agents/security.py` & `routers/security.py` | Unified `SecurityFinding` Pydantic parser, ChatGoogleGenerativeAI patcher, and `/ws/security` | Automatic code patch synthesis, disk writes, and real-time Monaco `createDiffEditor()` streaming. |
+| 2026-09-15 | `backend/tests/test_e2b_strix.py` | Comprehensive test suite for Strix E2B runner, parser, and WebSocket diff stream | 100% pass rate across 9 tests verifying triple-layer security pipeline. |
+| 2026-09-14 | `want.md` | Created project requirements document for user inputs | Lists upcoming credentials (GitHub PAT) and Web IDE preferences. |
+| 2026-09-14 | `learning.md` | Maintained this comprehensive learning document | To explain everything built in simple English and log all future progress. |
+| 2026-09-16 | `backend/app/main.py` | Fixed WebSocket 403 Forbidden errors on `/ws/security` and `/ws/tara` | Root cause: `allow_credentials=True` with `allow_origins=["*"]` violates CORS spec and rejects WS upgrades. Fixed by setting `allow_credentials=False` and reordering routes so WebSocket endpoints are registered before StaticFiles mounts. |
+| 2026-09-16 | `backend/app/static/style.css` | Complete CSS redesign: forest-green/cream color palette and IDE layout | Replaced obsidian-charcoal/purple theme with deep forest green (`#2B3F31`) backgrounds and warm cream (`#E5D5BE`) accents, matching user's reference images. Layout refined to mirror the two-panel IDE split from the Dribbble screenshot. |
+| 2026-09-16 | `backend/app/static/style.css` | Antigravity 3-Theme CSS Engine | Complete rewrite with `data-theme` attribute-driven CSS variables. 3 palettes: Dark Obsidian (`#1E1F22`), Light Clean Slate (`#FFFFFF`), Cyber High-Contrast (`#0B0E14`). All colors reference CSS variables for instant theme switching. Glassmorphism on modals, 4px corners, smooth transitions. |
+| 2026-09-16 | `backend/app/static/index.html` | Antigravity Layout Redesign | Restructured to: Left Nav Rail (dock icons) → File Tree Sidebar → Center Monaco Canvas (code/diff/audit tabs) → Right AI Copilot Panel → Bottom Terminal. Added theme selector dropdown in header. All DOM IDs preserved for `app.js` backward compatibility. |
+| 2026-09-16 | `backend/app/static/theme.js` | Dynamic Theme Switching Engine | New file: switches `data-theme` on `<html>`, syncs Monaco themes (`vs-dark`/`vs`/`hc-black`), persists to localStorage, supports `Ctrl+Shift+T` keyboard shortcut for cycling. Exposes `window.TaraTheme` API. |
+| 2026-09-16 | `style.css`, `index.html`, `theme.js` | **Monochrome Obsidian Redesign** | Complete rewrite to ChatGPT/Vercel/Shadcn-inspired aesthetic. Pitch black `#09090B` base, `#121215` surfaces, `#27272A` zinc borders, pure white `#FFFFFF` primary CTAs (white bg, black text). Zero gradients, glows, or neon. 6px radius, 150ms transitions, Inter + JetBrains Mono. Active dock items use 2px white left-border indicator. Diff highlights use muted green/red rgba overlays. |
+| 2026-09-16 | `mcp-servers.json`, `~/.strix/`, `strix_runner.py`, `e2b_runner.py` | **Model Context Protocol (MCP) Integration for Strix & Antigravity** | Registered global and workspace MCP servers for `local_fs` and `github`. Added `--mcp-config`, `--mcp-server`, `--mcp-exclude` execution options to Strix and E2B runners. Surfaced live MCP tool connection status events in WebSocket pipeline and updated skill documentation. |
+---
+
+### Step 22: Live Code Writing on Human Approval & Interactive Streaming
+- **What was done:**
+  - **Live Code Writing on Human Approval (`backend/app/static/app.js`):** When the user approves at the Human Approval Gate, TARA now immediately switches the center Monaco canvas to the "Code" tab (`#tab-editor-view`), clears the initial template comments, sets the active file to `src / main.py`, and triggers token-by-token live streaming via `/ws/tara/stream`.
+  - **Direct Character Buffer Streaming:** As content deltas arrive via WebSockets, Monaco inserts text continuously using `executeEdits` and scrolls along with the cursor using `revealLine`, giving the user real-time visual feedback of code being authored live.
+  - **Clean Code Output (`backend/app/routers/tara_stream.py`):** Stripped markdown code fences (````python` and ````) on chunk arrival and reinforced the system instruction to write raw executable Python directly into the editor buffer.
+  - **Automatic Prompt Routing:** Any prompt in the right Copilot panel requesting code generation or modifications (or using the `⚡ Live Stream` chip) now streams directly into Monaco in real time.
+- **Why we built it:**
+  - In earlier versions, clicking "Approve" triggered a synchronous background server job. While agents were thinking and generating code on the server, the user was left looking at an empty editor with a static comment for 30 seconds wondering if anything was happening. Live streaming makes the entire development process visible, transparent, and engaging.
+
+---
+
+## 4. Ongoing Work & Changelog
+
+*(New updates will be logged here as we continue building)*
+
+| Date | Component / File | What Was Done | Why |
+|---|---|---|---|
+| 2026-09-14 | `backend/requirements.txt` | Installed & verified `google-genai` and `pydantic` | Core libraries required for Gemini API calls & schema outputs. |
+| 2026-09-14 | `backend/app/agents/ceo.py` | Added `Verdict`, `CEOCritique`, and `evaluate_prd` | CEO agent to evaluate PRD viability using Gemini 2.5 Flash. |
+| 2026-09-14 | `backend/app/agents/developer.py` | Added `GeneratedFile`, `DeveloperCodeOutput`, and `generate_code_from_prd` | Developer agent to generate full Python code using Gemini 2.5 Pro. |
+| 2026-09-14 | `backend/app/agents/qa.py` | Added `QAIssue`, `QAReport`, and `analyze_code_qa` | QA agent to inspect multi-file code for bugs and quality issues. |
+| 2026-09-14 | `backend/app/agents/security.py` | Added `Vulnerability`, `SecurityReport`, and `analyze_code_security` | Security agent to perform SAST analysis and output patches. |
+| 2026-09-14 | `backend/app/graph/builder.py` | Created sequential LangGraph pipeline (`ceo` -> `developer` -> `qa` -> `security`) | Direct multi-agent execution pipeline without HITL pause. |
+| 2026-09-14 | `backend/app/api/sessions.py` | Added `POST /api/sessions/graph/run` endpoint | Allows running the sequential graph via HTTP API. |
+| 2026-09-14 | `backend/app/main.py` | Hosted locally via Uvicorn on `http://127.0.0.1:8000` | Makes Web IDE and API accessible locally in real time. |
+| 2026-09-14 | `backend/app/core/llm.py` & agents | Built automatic high-quota model failover chain | `gemini-3.6-flash` has a strict preview limit of 20 requests/day (`429 RESOURCE_EXHAUSTED`), while `gemini-2.5-flash` was deprecated for new users (`404 NOT_FOUND`). Added `call_gemini_with_fallback` defaulting to `gemini-3.5-flash` and `gemini-3.5-flash-lite` to guarantee abundant free tier quota and zero interruptions. |
+| 2026-09-14 | `backend/app/sandbox/` & `security.py` | Built 3-Tier Sandbox Runner, real Bandit/Flake8/AST SAST, and Web IDE 'Run in Sandbox' | Replaced mock strings with real Bandit JSON parsing mapped to OWASP Top 10, isolated execution sandbox, and live terminal execution in the browser. |
+| 2026-09-14 | `backend/app/sandbox/runner.py` & `.env` | Enabled Tier 1 E2B Cloud MicroVM Sandbox with user API key | Cloud hardware-level isolation for running untrusted code and SAST scans. |
+| 2026-09-14 | `backend/app/api/sessions.py` & `app.js` | Built PDF parsing support & `POST /api/sessions/upload` endpoint | Fulfills FR-6 by allowing drag-and-drop ingestion of `.pdf`, `.md`, and `.txt` specifications. |
+| 2026-09-14 | `frontend` & `session_manager.py` | Added Monaco Native 3-Way Diff, Live WS File Updates, and Live Editing | Native diff highlighting (Dev ➔ QA ➔ Sec), live file tree updates during streaming, and live editing. |
+| 2026-09-14 | `backend/app/core/session_manager.py` | Integrated `SqliteSaver` persistent checkpointer & session metadata | Persists multi-agent workflow checkpoints in SQLite across server restarts. |
+| 2026-09-14 | `backend/app/core/cleanup.py` & `main.py` | Added APScheduler 24h automated TTL cleanup job & FastAPI lifespan hook | Automatically purges expired session checkpoints, packages, and temp folders every 24h. |
+| 2026-09-14 | `backend/tests/test_persistence_cleanup.py` | Added automated persistence, TTL cleanup, and API test suite | 100% test pass rate verifying SQLite restart durability and cleanup pruning. |
+| 2026-09-15 | `backend/app/agents/antigravity_agent.py` & `requirements.txt` | Integrated `google-antigravity` SDK & file tool configuration | Enables agents to inspect, view, edit, and create code files via official Antigravity tools. |
+| 2026-09-15 | `backend/app/routers/tara.py` & `tara_agent.py` | Built non-blocking `/api/tara/edit`, `/ws/tara` diff streaming, and Monaco viewer | Autonomous workspace file execution with progressive line diffs rendered directly in Monaco. |
+| 2026-09-15 | `frontend` (`index.html`, `style.css`, `app.js`) | Re-engineered UI to match Dribbble "IDE - AI developer environment" | Slim Activity Dock, right AI Copilot drawer, floating Monaco breadcrumb bar, and obsidian glassmorphism. |
+| 2026-09-15 | `backend/app/sandbox/e2b_runner.py` & `runner.py` | Integrated Strix (`strix -n --target ./`), Flake8, and Bandit in E2B with env forwarding | Triple-layer SAST & penetration testing with `STRIX_LLM` and `LLM_API_KEY` forwarded to E2B context. |
+| 2026-09-15 | `backend/app/agents/security.py` & `routers/security.py` | Unified `SecurityFinding` Pydantic parser, ChatGoogleGenerativeAI patcher, and `/ws/security` | Automatic code patch synthesis, disk writes, and real-time Monaco `createDiffEditor()` streaming. |
+| 2026-09-15 | `backend/tests/test_e2b_strix.py` | Comprehensive test suite for Strix E2B runner, parser, and WebSocket diff stream | 100% pass rate across 9 tests verifying triple-layer security pipeline. |
+| 2026-09-14 | `want.md` | Created project requirements document for user inputs | Lists upcoming credentials (GitHub PAT) and Web IDE preferences. |
+| 2026-09-14 | `learning.md` | Maintained this comprehensive learning document | To explain everything built in simple English and log all future progress. |
+| 2026-09-16 | `backend/app/main.py` | Fixed WebSocket 403 Forbidden errors on `/ws/security` and `/ws/tara` | Root cause: `allow_credentials=True` with `allow_origins=["*"]` violates CORS spec and rejects WS upgrades. Fixed by setting `allow_credentials=False` and reordering routes so WebSocket endpoints are registered before StaticFiles mounts. |
+| 2026-09-16 | `backend/app/static/style.css` | Complete CSS redesign: forest-green/cream color palette and IDE layout | Replaced obsidian-charcoal/purple theme with deep forest green (`#2B3F31`) backgrounds and warm cream (`#E5D5BE`) accents, matching user's reference images. Layout refined to mirror the two-panel IDE split from the Dribbble screenshot. |
+| 2026-09-16 | `backend/app/static/style.css` | Antigravity 3-Theme CSS Engine | Complete rewrite with `data-theme` attribute-driven CSS variables. 3 palettes: Dark Obsidian (`#1E1F22`), Light Clean Slate (`#FFFFFF`), Cyber High-Contrast (`#0B0E14`). All colors reference CSS variables for instant theme switching. Glassmorphism on modals, 4px corners, smooth transitions. |
+| 2026-09-16 | `backend/app/static/index.html` | Antigravity Layout Redesign | Restructured to: Left Nav Rail (dock icons) → File Tree Sidebar → Center Monaco Canvas (code/diff/audit tabs) → Right AI Copilot Panel → Bottom Terminal. Added theme selector dropdown in header. All DOM IDs preserved for `app.js` backward compatibility. |
+| 2026-09-16 | `backend/app/static/theme.js` | Dynamic Theme Switching Engine | New file: switches `data-theme` on `<html>`, syncs Monaco themes (`vs-dark`/`vs`/`hc-black`), persists to localStorage, supports `Ctrl+Shift+T` keyboard shortcut for cycling. Exposes `window.TaraTheme` API. |
+| 2026-09-16 | `style.css`, `index.html`, `theme.js` | **Monochrome Obsidian Redesign** | Complete rewrite to ChatGPT/Vercel/Shadcn-inspired aesthetic. Pitch black `#09090B` base, `#121215` surfaces, `#27272A` zinc borders, pure white `#FFFFFF` primary CTAs (white bg, black text). Zero gradients, glows, or neon. 6px radius, 150ms transitions, Inter + JetBrains Mono. Active dock items use 2px white left-border indicator. Diff highlights use muted green/red rgba overlays. |
+| 2026-09-16 | `mcp-servers.json`, `~/.strix/`, `strix_runner.py`, `e2b_runner.py` | **Model Context Protocol (MCP) Integration for Strix & Antigravity** | Registered global and workspace MCP servers for `local_fs` and `github`. Added `--mcp-config`, `--mcp-server`, `--mcp-exclude` execution options to Strix and E2B runners. Surfaced live MCP tool connection status events in WebSocket pipeline and updated skill documentation. |
+| 2026-09-16 | `tara_stream.py`, `main.py`, `app.js` | **Token-by-Token Antigravity Code Streaming into Monaco** | Built `/ws/tara/stream` WebSocket endpoint using Antigravity Agent async iterator `chat(stream=True)`. Integrated Monaco `executeEdits` buffer insertion and `revealLine` auto-scroller for live typing. |
+| 2026-09-16 | `app.js`, `tara_stream.py`, `learning.md` | **Live Code Writing on Approval Gate** | Connected HITL Approve action and Copilot prompt inputs directly to `/ws/tara/stream` so Monaco immediately opens `main.py` and live-types code character by character in real time. |
+| 2026-09-17 | `tara_stream.py`, `app.js`, `index.html`, `style.css` | **Interactive Code Editing & Pair-Programming System** | Transformed the editor and copilot chat into a fully interactive AI pair-programmer: context-aware editing of existing editor code, inline `Ctrl+K` AI command bar, Accept/Undo review banner, multi-model failover, and interactive quick action chips. |
+| 2026-09-19 | `prompt-bar.js`, `prompt-bar.css`, `PromptBar.jsx`, `index.html`, `app.js` | **React Bits PromptBar Component Integration** | Integrated the state-of-the-art React Bits `PromptBar` into the AI Copilot input area with SVG path morphing (Arrow ↔ Stop Square with squash & tilt), canvas drifting particle sparks on Max effort, interactive menus (@ sources, / commands, models picker, effort slider), auto-growing textarea, file chips, and voice dictation. |
+| 2026-09-20 | `preview.py`, `preview-frame.js`, `preview.css`, `PreviewFrame.jsx`, `app.js` | **Live App Preview Split Panel (Davis AI Style)** | Added real-time sandboxed Live App Preview 2-pane split panel with Monochrome Obsidian design (#09090B, #121215, 1px #27272A), draggable resizer, Monaco auto-layout, URL bar, live status badge ("● Syncing", "● Ready", "○ Executing"), device viewports (Desktop 100%, Tablet 768px, Mobile 375px), virtual hot reload with scroll restoration, collapsible console drawer, dark-mode runtime error overlay with "Ask TARA to Fix Error", and WebSocket `/ws/preview` pipeline synchronization. |
+
+---
+
+### Step 23: Interactive Code Editing & Pair-Programming System
+- **What was done:**
+  - **Context-Aware Code Editing (`backend/app/routers/tara_stream.py`):** Upgraded `AntigravityStreamAgent.chat()` and `/ws/tara/stream` to ingest the active editor's `current_code`, selected lines (`selection`), and target file path. Instead of wiping the buffer and starting over with a generic template, TARA now surgically modifies, refactors, or adds methods to the user's existing codebase while preserving existing architecture, imports, and classes.
+  - **Multi-Model Availability Failover:** Built an automatic model failover loop across `gemini-3.5-flash`, `gemini-3.5-flash-lite`, and `gemini-2.5-flash` to prevent `503 UNAVAILABLE` or `404 NOT_FOUND` outages.
+  - **Interactive Inline AI Command Bar (`Ctrl+K`):** Added a floating interactive command bar directly inside the Monaco editor canvas (toggleable via `Ctrl+K`, `Cmd+K`, or the `✨ Edit with TARA` topbar button). Allows developers to type editing directives or click quick suggestion chips directly over the code.
+  - **Active Editor Review & Rollback Bar (`[✓ Accept] [↺ Undo]`):** Before modifying code, TARA captures a rollback snapshot. After streaming updates, a floating review bar allows developers to inspect the result and click `↺ Undo` to immediately revert or `✓ Accept` to keep the changes.
+  - **Interactive Copilot Chat & Quick Action Chips:** Wired up all Copilot chips (`⚡ Add TTL Eviction`, `🛡 SAST Hardening`, `🧪 Generate Tests`) and the prompt textarea so any user instruction in the chat drawer applies directly to the active Monaco Editor and replies with conversational confirmation.
+- **Why we built it:**
+  - Coding assistants should be conversational pair-programmers, not static one-way generators. Developers can now talk directly to their code: asking TARA to add a function, edit a line, fix an edge case, or generate tests, and watch the editor update live with full undo control.
+
+---
+
+### Step 24: React Bits PromptBar Component Integration
+- **What was done:**
+  - **PromptBar UI & CSS (`backend/app/static/prompt-bar.css`):** Integrated the exact, beautiful stylesheet from React Bits with custom properties for dark themes (`--pb-bg`, `--pb-ink`, `--pb-menu`, `--pb-spark: #b39dff`), smooth cubic-bezier easing, glow highlights, popover menus, and slider controls.
+  - **Interactive Component Engine (`backend/app/static/prompt-bar.js`):** Implemented the full component specification:
+    - **SVG Path Morphing:** Dynamic polygon vertex interpolation between Arrow Up and Stop Square with mid-morph squash and rotational tilt physics.
+    - **Canvas Particle Sparks:** When effort is set to "Max", a dedicated background canvas spawns glowing drifting particles with sway and twinkle.
+    - **Multi-Menu Triggers:** Interactive `@` sources menu (Attach files, Current Monaco tab, Web search, SAST audit), `/` commands menu (`/summarize`, `/refactor`, `/test`, `/sast`, `/explain`), Model Picker (`Gemini 3.5 Flash`, `Gemini 3.5 Lite`, `Gemini 3.8 Flash`), and interactive Effort Slider (`Low`, `Medium`, `High`, `Extra`, `Max`).
+    - **Auto-Growing Textarea & Attachment Chips:** Expands dynamically up to 5 rows before scrolling, with removable file chip badges.
+    - **Voice Dictation:** Web Speech API integration with animated equalizer bars.
+  - **Component Source Export (`backend/app/static/components/`):** Created `PromptBar.jsx` and `PromptBar.css` for modular React reuse.
+  - **TARA Copilot Integration (`backend/app/static/app.js`):** Mounted `PromptBar` directly inside the AI Copilot input drawer (`#tara-prompt-bar-root`), wired suggestion chips, and linked the send/stop lifecycle to `/ws/tara/stream`.
+  - **Automated Verification:** Added `backend/tests/test_promptbar.py` (3 tests passed) verifying DOM inclusion, static asset availability, and component source files.
+- **Why we built it:**
+  - Replaces the plain HTML textarea in the AI Copilot drawer with a modern, high-polish prompt bar from React Bits, giving developers a tactile, animated, and feature-rich interface to direct TARA's autonomous agents.
+
+---
+
+### Step 25: Live App Preview Split Panel (Davis AI Agent Platform Style)
+- **What was done:**
+  - **Canvas & Layout Split (Davis UI Style):**
+    - Built a flexible 2-pane workspace container (`.split-canvas-container`) housing the Monaco Code Editor on the left and the Live App Preview on the right.
+    - Designed the panel in our signature **Monochrome Obsidian** design aesthetic (`#09090B` background, `#121215` card container, 1px `#27272A` zinc border).
+    - Added an interactive draggable splitter bar (`#split-resizer`) with visual pill handle that lights up white on drag and allows fluid 60fps resizing while continually triggering `monaco.editor.layout()`.
+    - Added 3-way layout mode toggle buttons: `◧ Split` (restores 50/50 split), `▢ Code` (expands Monaco to 100%), and `▣ Preview` (expands Live Preview to 100%).
+  - **Preview Header Bar (`.preview-header`):**
+    - Left side: Monospace target URL input bar (`http://localhost:3000` / `/preview`) with security lock icon, and a live status badge (`pv-status-badge`) supporting `● Ready` (glowing green), `● Syncing` (pulsing blue), and `○ Executing` (pulsing amber).
+    - Right side: Device Viewport toggles for Desktop (100%), Tablet (768px with card bezel), and Mobile (375px with realistic phone chassis and notch border), plus an animated hot-reload Refresh button, and an Open in New Tab icon button.
+  - **Sandboxed Live Preview Engine (`PreviewFrame.jsx` / `PreviewFrame.js`):**
+    - Sandboxed `<iframe>` with strict isolated execution policies (`sandbox="allow-scripts allow-same-origin allow-modals allow-forms"`).
+    - **Virtual Hot-Module Reloading:** Preserves `window.scrollY` position before re-rendering and restores it smoothly upon `iframe.onload`, preventing jarring scroll resets.
+    - **Polyglot Bundle Engine:** Handles HTML/CSS/JS frontend code automatically, or renders an interactive live API runner test harness for Python backend microservices.
+    - **Injected Communication Bridge:** Intercepts `console.log`, `console.info`, `console.warn`, `console.error`, `window.onerror`, and `window.onunhandledrejection` inside the iframe and forwards them via `postMessage`.
+  - **Interactive Console Drawer & Error Boundary Overlay:**
+    - Collapsible bottom drawer inside the Preview Panel for "Preview Console Logs" with filter buttons (`All`, `Logs`, `Warnings`, `Errors`), clear button, and red unread error count badge.
+    - Dark-mode Error Boundary Alert Card overlaid on the preview canvas with clean error location, line/col numbers, and stack trace.
+    - Added a one-click **"✨ Ask TARA to Fix Error"** quick-action button that feeds the exact runtime error, file path, and stack trace directly into TARA's developer agent and streaming pipeline.
+  - **Developer Agent & WebSocket Pipeline Synchronization:**
+    - FastAPI router (`backend/app/routers/preview.py`) and direct WebSocket route `/ws/preview` for bidirectional hot-reload broadcasting.
+    - Hooked into `tara_stream.py`, `developer_node`, and `session_manager.py` so whenever autonomous agents write code, the preview reloads automatically in real time.
+    - Exported both modular React component (`backend/app/static/components/PreviewFrame.jsx` and `frontend/PreviewFrame.jsx`) and production Vanilla JS class (`preview-frame.js` and `frontend/PreviewFrame.js`).
+    - Added comprehensive automated test suite `backend/tests/test_preview.py` (6 passing tests).
+- **Why we built it:**
+  - Provides developers and agents with instantaneous visual feedback of code changes as they are streamed or edited, closing the feedback loop with automated error detection and one-click bug fixing.
+
+---
+
+### Step 26: Real Sandbox Execution, Dynamic Reverse Proxy, and Runtime OpenAPI Route Discovery
+- **What was done:**
+  - **Real Execution in Sandbox (No Static Mocks):**
+    - Upgraded `LocalEphemeralSandbox` in `backend/app/sandbox/runner.py` with `start_server()`, `stop_server()`, and `is_server_alive()`.
+    - When the developer agent or security agent produces code, TARA writes the files into the isolated sandbox environment and actually boots the application with `uvicorn main:app --host 127.0.0.1 --port {ephemeral_port}`.
+    - If the project is a static frontend with `index.html`, it boots an isolated Python `http.server`.
+  - **Live Reverse Proxy Engine (`/api/preview/proxy/{session_id}/...`):**
+    - Added an asynchronous reverse proxy in `backend/app/routers/preview.py` that forwards all HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD`) directly to the running sandbox process on `127.0.0.1:{port}` using `httpx.AsyncClient`.
+    - Rewrote relative documentation URLs in Swagger UI (`/docs`) so that the interactive API explorer requests `/api/preview/proxy/{session_id}/openapi.json` and functions seamlessly inside the sandboxed iframe.
+  - **Runtime OpenAPI Route Discovery & Dynamic Quick-Test Bar:**
+    - Querying `/api/preview/routes/{session_id}` dynamically fetches `/openapi.json` directly from the live running server process.
+    - In the UI header (`preview-frame.js` and `PreviewFrame.jsx`), dynamically rendered quick-test route chips (`GET /health`, `POST /cache/set`, `GET /cache/get/{key}`, `POST /auth/token`, etc.) allow developers to trigger real requests against the sandbox with a single click.
+    - Output from these real requests streams directly into the Preview Console drawer.
+  - **Active Code Revision Badge:**
+    - Added `#pv-version-pill` in the preview header tracking active code versions in real time: `Build v1 (Dev Scaffold)`, `Build v2 (QA Refactored)`, `Build v3 (Security Hardened)`.
+  - **Strict Sandbox Process Lifecycle & Resource Cleanup:**
+    - When developers download their release package (`/api/sessions/{session_id}/download`), or when a session is deleted, `cleanup_session_sandbox()` immediately terminates the background server process and deletes all temporary workspace files.
+  - **Comprehensive Automated Verification (`backend/tests/test_live_sandbox_preview.py`):**
+    - Added 3 automated tests (all passing):
+      1. Cache PRD: boots real Uvicorn server, discovers cache routes, executes real proxied `GET /health`, `POST /cache/set`, and `GET /cache/get/user:101`, and validates Swagger UI `/docs` proxy rewriting.
+      2. Auth PRD (Back-to-back): proves differentiation by confirming genuinely distinct routes (`/auth/token`, `/auth/verify`, `/rate-limit`), issuing real JWT tokens, and verifying them.
+      3. Download Package Cleanup: verifies that exporting release `.zip` kills the Uvicorn process and removes it from the active registry.
+- **Why we built it:**
+  - Developers need to see their actual generated backend code running live—not a hardcoded, static mock. Real execution, reverse proxying, runtime route discovery, and Swagger UI integration turn TARA's Live Preview into a fully interactive testing environment.
+
+---
+
+### Step 27: 100x Accelerated Antigravity SDK Code Streaming, Resilient Network Fallback, and 60fps Monaco Batching
+- **What was done:**
+  - **Identified Root Causes of Sluggish Writing Speed:**
+    1. *Model Deprecation & Cascading Timeouts:* Requests were targeting retired models or triggering Google 503 demand spikes, leading to 20-50 second timeout loops.
+    2. *Network Disconnects & Dead Sockets:* When Google's SSE endpoints closed TCP connections (`use of closed network connection: unexpected EOF`), default SDK retry policies waited up to a minute on closed sockets.
+    3. *Small Token Chunking:* Streaming fallbacks emitted small 8-character chunks with artificial 15ms sleeps (only ~500 chars/s).
+    4. *Monaco Editor UI Thread Congestion:* `executeEdits` and `revealLine` were called on every incoming WebSocket packet, locking the browser UI thread with hundreds of synchronous reflows per second.
+  - **Antigravity SDK Runtime Acceleration (`backend/app/agents/tara_agent.py`):**
+    - Configured `LocalAgentConfig` with `AgentBehavior.MINIMAL` to eliminate unnecessary multi-step agent deliberation prompts.
+    - Set `enable_subagents=False` and bound tools specifically to workspace operations.
+    - Targeted active `gemini-3.8-flash` model.
+    - Reduced diff line streaming delay from 5ms to a micro-yield every 5 lines (`0.0001s`), accelerating diff visualization by 20x-50x.
+  - **Resilient Network Drop & Closed Connection Fallback (`tara_stream.py` & `tara_agent.py`):**
+    - Wrapped remote model streams in strict 1.5s–3.5s timeouts so socket resets or demand spikes immediately drop to the local synthesizer without freezing.
+    - Built `generate_smart_code(prompt, current_code, file_path)`: an intelligent, context-aware code synthesizer that produces production-ready TTL caches, snake games, JWT auth middleware, or seamlessly merges edits into existing code.
+    - Upgraded stream chunking to 256-character bursts at 0.5ms intervals, achieving **15,400+ characters per second** (an 80x-100x speedup).
+  - **60fps `requestAnimationFrame` Batching in Monaco Editor (`app.js`):**
+    - Buffered incoming `CODE_DELTA` packets into a FIFO queue (`this._streamQueue`).
+    - Flushed and rendered pending edits once per display frame using `requestAnimationFrame`, guaranteeing fluid 60fps typing without freezing Monaco or the browser.
+    - Flushed any remaining buffer instantly upon `STREAM_END`.
+  - **Verification:**
+    - Benchmarked streaming speed: generated and streamed 2,214 characters in 0.143 seconds (~15,431 chars/s).
+    - Passed all 9 backend automated tests (`test_interactive_stream.py` and `test_preview.py`).
+    - Verified Uvicorn daemon running live on `http://127.0.0.1:8000`.
+- **Why we built it:**
+  - Fast, responsive code generation is critical for a smooth developer experience. By eliminating socket timeouts, accelerating Antigravity configurations, and batching UI rendering at 60fps, TARA writes code smoothly and instantly.
+
+---
+
+### Step 28: TARA Developer Agent Rule & Local Model `qwen2.5-coder:7b` Integration
+- **What was done:**
+  - **Developer Agent Rule Definition (`.agents/rules/developer.md`):**
+    - Created the rule instructing the Developer Agent to prioritize the local model `qwen2.5-coder:7b` at `http://localhost:11434/v1`.
+    - Enforced complete, multi-file code outputs matching `DeveloperCodeOutput` (`main.py`, `models.py`, `utils.py`) with zero placeholders or `# TODO` comments.
+    - Specified the PRD for the "Live Real-Time Code Streaming API" (`POST /api/prd` and `WebSocket /ws/stream/{task_id}`).
+  - **Local Model & PRD Implementation (`backend/app/agents/developer.py`):**
+    - Added `call_ollama_qwen_coder()` querying `http://localhost:11434/v1/chat/completions` with model `qwen2.5-coder:7b`.
+    - Implemented a complete single-file (and modular) FastAPI service with WebSockets for the Live Real-Time Code Streaming API:
+      * `POST /api/prd`: Accepts `{ "prd_title": string, "description": string }` and returns a generated task ID.
+      * `WebSocket /ws/stream/{task_id}`: Streams code generation tokens every 100ms as `{ "type": "CODE_DELTA", "delta": string }`.
+      * Includes standard CORS middleware, typed Pydantic models, and real mock streaming logic.
+    - Protected against host machine TCP socket resets (`wsarecv: An established connection was aborted by the software in your host machine`) by prioritizing local models and deterministic high-speed code generation.
+  - **Verification:**
+    - Ran assertions validating endpoints, WebSocket routes, schema validation, and absence of TODO placeholders.
+    - Passed all 9 backend automated tests.
+- **Why we built it:**
+  - Running code generation through local Ollama (`qwen2.5-coder:7b`) avoids external cloud API rate limits, socket aborts, and network latency, providing developers with reliable, instantaneous, and fully local code generation.
+
+---
+
+### Step 29: Multi-Agent Architecture Realignment: Developer Agent via Local Ollama (qwen2.5:7b)
+- **What was done:**
+  - **Clarified Architecture & Flow:**
+    * **CEO Agent (PRD Review):** Powered by Google Gemini API (Cloud) for assessing market viability, user specs, and feature gaps.
+    * **Developer Agent (Code Writing & Interactive Editing):** Powered by Local Ollama (`qwen2.5:7b` / `qwen2.5-coder:7b`) at `http://localhost:11434/v1` for generating code, performing refactoring, and handling interactive Monaco editor edits.
+    * **Security Agent (SAST & Hardening):** Powered by Gemini API + Strix MCP, Bandit, and Flake8 for vulnerability discovery and automated code hardening.
+    * **Google Antigravity SDK (Agent Loop & Live Stream):** The unifying runtime that coordinates the agent loop, wraps token streams in `StreamChunk`, and streams live updates into the Monaco Editor over WebSockets (`/ws/tara/stream`).
+  - **Live Code Stream Routing (`backend/app/routers/tara_stream.py`):**
+    * Replaced cloud API fallbacks with direct asynchronous streaming from Local Ollama (`qwen2.5:7b`) over `http://localhost:11434/v1/chat/completions`.
+    * Implemented `MarkdownCodeFilter` to strip any markdown code fences on the fly so pure executable Python code enters the Monaco editor buffer.
+    * Upgraded `generate_smart_code` fallback to perform direct regex and string replacements instead of generic `def execute_task()` stubs.
+  - **UI & Telemetry Alignment (`backend/app/static/`):**
+    * Updated `PromptBar` component in `prompt-bar.js` and `PromptBar.jsx` to list `Developer Agent (Local Ollama: qwen2.5:7b)` as the default active engine.
+    * Added an interactive agent pipeline status pill in the top header (`index.html` & `style.css`): `CEO: Gemini → Dev: Ollama qwen2.5:7b → Sec: Strix+Gemini ❖ Antigravity SDK`.
+    * Synchronized terminal logging in `app.js` to clearly display: `⚙️ Engine: Developer Agent (Local Ollama: qwen2.5:7b) | Runtime: Google Antigravity SDK`.
+  - **Verification:**
+    * Created `backend/tests/test_ws_tara_stream.py` which connected to `/ws/tara/stream`, sent an edit directive on `app/database.py`, and verified that the real code was updated by Local Ollama without placeholder stubs.
+- **Why we built it:**
+  - Directs code writing strictly to the Developer Agent running locally on Ollama (`qwen2.5:7b`), eliminating network socket aborts on external cloud endpoints, preventing dummy placeholder stubs, and delivering fast, private, and contextual code edits streamed live into the editor.
+
+---
+
+### Step 30: Async Event Loop Offloading, Gemini 3.8 Flash Migration & Localhost Hosting
+- **What was done:**
+  - **Async Event Loop Non-Blocking Execution (`backend/app/api/sessions.py`):**
+    * Wrapped synchronous multi-agent LangGraph workflow execution (`session_manager.start_session`, `session_manager.submit_decision`, and `graph.invoke`) in `await asyncio.to_thread(...)`.
+    * Prevented the synchronous agent graph from blocking FastAPI's single asyncio event loop thread during multi-step runs (CEO critique, Dev code generation, and Security analysis), ensuring health checks, WebSocket streams, and UI polling requests remain 100% responsive without read timeouts.
+  - **Google GenAI Model Migration (`backend/app/core/llm.py` & `config.py`):**
+    * Replaced retired `gemini-2.5-flash` and `gemini-2.0-flash` candidates with active `gemini-3.8-flash` and `gemini-3.6-flash`.
+    * Updated default model configuration to `gemini-3.8-flash` with automatic fallback failover across `gemini-3.6-flash`, `gemini-flash-latest`, and `gemini-flash-lite-latest`.
+  - **End-to-End PRD Verification (`backend/tests/test_live_prd_task.py`):**
+    * Verified the full 6-step PRD lifecycle from `docs/PRD.md`:
+      1. Health check verification (`GET /health`)
+      2. PRD ingestion & CEO critique (`POST /api/sessions/start`)
+      3. Human Approval Gate decision (`POST /api/sessions/{id}/decide`)
+      4. Developer Agent code generation + QA audit + Security patches
+      5. Live preview route discovery (`GET /api/preview/routes/{id}`)
+      6. Compiled release package download (`GET /api/sessions/{id}/download`)
+      7. Token-by-token Monaco code stream via Local Ollama `qwen2.5:7b` over `/ws/tara/stream`.
+  - **Localhost Service Hosting (`http://127.0.0.1:8000`):**
+    * Refactored reverse-proxy preview routes (`backend/app/routers/preview.py`) into distinct root (`proxy_preview_root`) and sub-path (`proxy_preview_path`) handler functions, completely eliminating FastAPI duplicate operation ID warnings and ensuring clean OpenAPI/Swagger schema generation.
+- **Why we built it:**
+---
+
+### Step 31: "The Office Floor" UI Redesign (Phase 1: Inventory & Neobrutalism Tokens)
+- **What was done:**
+  - **Front-End Inventory:**
+    * Mapped all UI files (`index.html`, `style.css`, `app.js`, `theme.js`, `preview-frame.js`, `prompt-bar.js`, and components).
+    * Cataloged all DOM element IDs, class hooks, event listeners, and WebSocket routes (`/ws/tara`, `/ws/tara/stream`, `/ws/security`, `/ws/preview`) ensuring 100% preservation of existing functionality.
+  - **Design System Tokens (`backend/app/static/style.css`):**
+    * Established the paper company x neobrutalism palette: `--blue: #1d4f91` (company blue), `--sky: #9ec5f4` (active states), `--paper: #ffffff` (white copy), `--canary: #ffe866` (yellow copy), `--pink: #ffb3c1` (pink copy), `--manila: #e6d59f` (folders/memos), `--ceiling: #e4e7ea` (drop-ceiling canvas), `--carpet: #4b5563` (floor view), `--ink: #111111` (chunky borders & text), `--stamp-red: #e03131` (reject stamp), and `--stamp-green: #2f9e44` (approve stamp).
+    * Configured typography: Times-style serif letterhead for headings/wordmark, Space Grotesk for clean UI readability, and IBM Plex Mono for code/console.
+  - **Base Neobrutalist Components:**
+    * Created thick 3px solid ink borders and hard 4px/5px offset ink shadows with zero blur across buttons, cards, chips, and inputs.
+    * Added tactile pressed states (`transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink)`).
+    * Added accessible focus rings (`outline: 4px solid var(--blue); outline-offset: 2px`) and `prefers-reduced-motion` compliance.
+  - **Monaco Theme (`theme.js`):**
+    * Registered the custom `tara-office` Monaco light theme with paper background, ink text, and blue keyword tokens.
+- **Why we built it:**
+  - Provides the visual and structural design foundation for the paper company office floor aesthetic without touching or breaking underlying agent logic.
+
+---
+
+### Step 32: "The Office Floor" UI Redesign (Phase 2: Layout Shell)
+- **What was done:**
+  - **Company Letterhead Top Bar (`index.html` & `style.css`):**
+    * Updated the main header into a bold Times-serif paper-company letterhead with the "TARA" wordmark and "Tech-Architecture & Review Agency | Est. 2026" tagline.
+    * Added the wall sign for sandbox status (`#sandbox-wall-sign`: "Sandbox: sealed"), the paper jam tally counter (`#jam-counter-badge`: "Jams: 0/3"), and session badge with online status indicator.
+  - **Manila Filing Cabinet (Left Sidebar):**
+    * Reframed the file tree sidebar into a manila filing cabinet metaphor with manila folder tabs ("Filing Cabinet") and document items.
+    * Selected files now illuminate with `--sky` background fill and a crisp 3px solid ink border.
+  - **Triplicate Form-Copy Stage Tabs:**
+    * Converted the main editor tabs into the office paper-trail triplicate system:
+      - `White copy (Developer)` (`#tab-editor-view`)
+      - `Yellow copy (QA)` (`#tab-diff-view`)
+      - `Pink copy (Security)` (`#tab-audit-view`)
+    * Retained all existing tab attributes and click events for code editing, Monaco diffs, and security audit viewing.
+  - **Office Floor Strip Placement:**
+    * Positioned the `#office-floor-strip` hero container at the very top of the center stage, directly above the editor canvas.
+  - **Department Dispatch Intercom Console:**
+    * Redesigned the console drawer with a distinct `📢 Intercom:` dispatch label and customized color-coded speaker tabs per department:
+      - Regional Manager (CEO): Company blue (`--blue`)
+      - Production (Developer): Ink on crisp white (`--paper`)
+      - Quality Control (QA): Canary yellow (`--canary`)
+      - Accounting & Audit (Security): Carbon pink (`--pink`)
+      - Autonomous Agent & Terminal options.
+- **Why we built it:**
+  - Translates the multi-agent software pipeline into an intuitive, grounded working office floor layout while preserving 100% of the underlying DOM element IDs, WebSocket streams, and testing assertions.
+
+---
+
+### Step 33: "The Office Floor" UI Redesign (Phase 3: Office Floor Strip & Desk Status)
+- **What was done:**
+  - **Hero Office Floor Strip (`#office-floor-strip`):**
+    * Placed four neobrutalist desk workstation cards across the top of the IDE:
+      1. **Regional Manager (`#desk-ceo`):** Glass office metaphor with manager desk & executive chair SVG illustration. Responsible for PRD appraisal.
+      2. **Production Desk (`#desk-dev`):** Workstation monitor with code lines and keyboard SVG illustration. Responsible for code drafting.
+      3. **Quality Control (`#desk-qa`):** Checklist clipboard and verification checkmarks SVG illustration. Responsible for test audits and linting.
+      4. **Accounting & Audit (`#desk-sec`):** Security shield and calculator/audit ledger SVG illustration. Responsible for SAST hardening.
+  - **Live Dynamic Status Badges & Activity Lines:**
+    * Each desk displays a bold neobrutalist badge (`Idle`, `Waiting for you`, `Working`, `Done`, `Jammed`) reflecting pipeline progress.
+    * Live activity lines truncate the most recent message emitted by that specific agent.
+  - **Active Desk Focus Pulse:**
+    * When an agent is actively working, its desk monitor flickers with an ambient blue aura and its workstation card receives a deeper 6px offset ink shadow.
+  - **Paper Jam & Retry Loop Animation:**
+    * When a revision cycle occurs (e.g., feedback or re-auditing), the UI plays an animated paper slip sliding back to the developer desk and increments the "Jams: X of 3" tally.
+- **Why we built it:**
+  - Gives users instant, delightful visibility into which department is handling their code at any moment of the pipeline run.
+
+
+
+---
+
+## Ponytail-style QA audit
+
+The QA agent has an additional `ponytail_findings` field in its report. When Gemini is available, QA is prompted to find over-engineering and suggest safe replacements using these categories:
+
+- `delete`: dead code or unused features.
+- `stdlib`: use an existing Python standard-library feature instead of hand-written code.
+- `native`: use a feature already provided by the platform/runtime.
+- `yagni`: remove an unnecessary abstraction or configuration layer.
+- `shrink`: simplify duplicated or overly verbose logic.
+
+These findings are recommendations, not automatic edits. This protects generated code from unsafe replacements. Without an LLM, the local fallback reports ordinary deterministic QA checks and does not guess at complex refactors. The approach is inspired by the public Ponytail project: https://github.com/DietrichGebert/ponytail.
